@@ -1,8 +1,30 @@
-FROM nginx:alpine
+# ---------- Stage 1: Build the application --------------
+FROM nginx:alpine AS builder
 
-COPY index.html /usr/share/nginx/html/
-COPY css /usr/share/nginx/html/css
-COPY js /usr/share/nginx/html/js
+# Set the working directory
+WORKDIR /app
+
+# Copy the application files to the builder stage
+COPY index.html .
+COPY css ./css
+COPY js ./js
+
+# -----   Stage 2: Serve the application with Nginx --------
+
+FROM nginx:1.27-alpine
+
+# Remove default nginx config and default HTML
+RUN rm -rf /usr/share/nginx/html/* \
+    && rm /etc/nginx/conf.d/default.conf
+
+# Copy built files from the builder stage
+
+COPY --from=builder /app /usr/share/nginx/html
+
+# Copy nginx configuration file
+
 COPY nginx.conf /etc/nginx/conf.d/default.conf
+
+# Expose port 8080
 
 EXPOSE 80
