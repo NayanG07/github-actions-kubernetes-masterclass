@@ -1,0 +1,256 @@
+name : DevSecOps Pipeline
+
+on:
+    push:
+      branches: [main]
+      paths-ignore:
+          - 'k8s/**'
+          - 'docs/**'
+          - '**/*.md'
+    pull_request:
+      branches: [main]
+
+jobs:
+
+  secret-scan:
+    name: Secret Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkour Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    
+    
+# JOB 2 - OWASP Dependency Check
+
+  dependency-check:
+    name: OWASP Dependency Check
+    runs-on: ubuntu-latest
+      
+    steps:
+      - name: Checkour Code
+        uses: actions/checkout@v4
+  
+      - name: Set up GO
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+      
+      - name: Install Nancy
+        run: go install github.com/aquasecurity/nancy@latest
+
+      - name: Scan GO dependencies
+        working-directory: ./backend
+        run: go list -json -dep ./.. | nancy sleuth
+
+      - name: OWASP Dependency Check
+        uses: dependency-check/Dependency-Check_Action@main
+        with:
+          project: "skillpluse"
+          path: "./backend"
+          format: "HTML,SARIF"
+          args: >
+            --failOnCVSS 7
+            --enableRetired
+      
+      - name: Upload Dependency Check Report
+        uses:  github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: reports/dependency-check-report.sarif
+          category: owasp-dependency-check
+
+  trivy-backend:
+    name: Trivy — backend image
+    runs-on: ubuntu-latest
+    needs: secret-scan   # don't scan if secrets were found
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Build the image locally — we scan before pushing to Docker Hub.
+      # Tag with "scan" so it's clear this is the scan-only build.
+      - name: Build backend image (local, no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          file:    ./backend/Dockerfile
+          push:    false
+          tags:    skillpulse-backend:scan
+          # Reuse GitHub Actions cache to speed up build
+          cache-from: type=gha,scope=backend
+          cache-to:   type=gha,scope=backend,mode=max
+          load:    true   # load into local Docker daemon for trivy to scan
+
+      # Trivy scans the local image for:
+      #   - OS package CVEs (Alpine/distroless)
+      #   - Go library CVEs (from binary's embedded module info)
+      # CRITICAL severity: fail the build
+      # HIGH severity: show in report but don't fail (adjust as needed)
+      - name: Run Trivy on backend image
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref:    "skillpulse-backend:scan"
+          format:       "sarif"
+          output:       "trivy-backend.sarif"
+          severity:     "CRITICAL,HIGH"
+          exit-code:    "1"          # fail the job on CRITICAL findings
+          ignore-unfixed: true       # skip CVEs with no fix available yet
+          trivyignores: ".trivyignore"
+
+      - name: Upload Trivy backend SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-backend.sarif
+          category:   trivy-backend
+
+      # Also produce a readable table report for the Actions log
+      - name: Trivy backend — table output
+        uses: aquasecurity/trivy-action@master
+        if: always()
+        with:
+          image-ref:    "skillpulse-backend:scan"
+          format:       "table"
+          severity:     "CRITICAL,HIGH,MEDIUM"
+          ignore-unfixed: true
+
+
+  trivy-frontend:
+    name: Trivy — frontend image
+    runs-on: ubuntu-latest
+    needs: secret-scan
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build frontend image (local, no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          file:    ./frontend/Dockerfile
+          push:    false
+          tags:    skillpulse-frontend:scan
+          cache-from: type=gha,scope=frontend
+          cache-to:   type=gha,scope=frontend,mode=max
+          load:    true
+
+      - name: Run Trivy on frontend image
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref:    "skillpulse-frontend:scan"
+          format:       "sarif"
+          output:       "trivy-frontend.sarif"
+          severity:     "CRITICAL,HIGH"
+          exit-code:    "1"
+          ignore-unfixed: true
+          trivyignores: ".trivyignore"
+
+      - name: Upload Trivy frontend SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-frontend.sarif
+          category:   trivy-frontend
+
+      - name: Trivy frontend — table output
+        uses: aquasecurity/trivy-action@master
+        if: always()
+        with:
+          image-ref:    "skillpulse-frontend:scan"
+          format:       "table"
+          severity:     "CRITICAL,HIGH,MEDIUM"
+          ignore-unfixed: true
+
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # JOB 4 — Trivy filesystem scan (IaC + config misconfigurations)
+  # Scans the repo itself — Dockerfiles, k8s manifests, terraform — for
+  # misconfigurations. Runs in parallel with image scans.
+  # ──────────────────────────────────────────────────────────────────────────
+  trivy-fs:
+    name: Trivy — filesystem + IaC
+    runs-on: ubuntu-latest
+    needs: secret-scan
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Trivy filesystem scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type:   "fs"
+          scan-ref:    "."
+          format:      "sarif"
+          output:      "trivy-fs.sarif"
+          # misconfig catches: Dockerfile best-practice violations,
+          # k8s manifest issues (no resource limits, running as root, etc.),
+          # terraform security issues
+          scanners:    "misconfig,secret"
+          severity:    "CRITICAL,HIGH"
+          exit-code:   "0"   # warn only for IaC — don't fail on misconfig
+          trivyignores: ".trivyignore"
+
+      - name: Upload Trivy FS SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-fs.sarif
+          category:   trivy-filesystem
+
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # JOB 5 — Security gate
+  # Final job that only passes if ALL security jobs passed.
+  # Your CI workflow should `needs: security-gate` before pushing images.
+  # This is the single checkpoint CD depends on.
+  # ──────────────────────────────────────────────────────────────────────────
+  security-gate:
+    name: Security Gate ✅
+    runs-on: ubuntu-latest
+    needs:
+      - secret-scan
+      - dependency-check
+      - trivy-backend
+      - trivy-frontend
+      - trivy-fs
+    if: always()
+
+    steps:
+      - name: Check all security jobs passed
+        run: |
+          echo "secret-scan:       ${{ needs.secret-scan.result }}"
+          echo "dependency-check:  ${{ needs.dependency-check.result }}"
+          echo "trivy-backend:     ${{ needs.trivy-backend.result }}"
+          echo "trivy-frontend:    ${{ needs.trivy-frontend.result }}"
+          echo "trivy-fs:          ${{ needs.trivy-fs.result }}"
+
+          # Fail if any required job did not succeed
+          if [[ \
+            "${{ needs.secret-scan.result }}"      != "success" || \
+            "${{ needs.dependency-check.result }}" != "success" || \
+            "${{ needs.trivy-backend.result }}"    != "success" || \
+            "${{ needs.trivy-frontend.result }}"   != "success" \
+          ]]; then
+            echo "❌ One or more security checks failed. Blocking image push."
+            exit 1
+          fi
+
+          echo "✅ All security checks passed. Safe to push images."
