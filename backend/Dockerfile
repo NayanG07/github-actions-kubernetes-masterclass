@@ -22,7 +22,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
       -trimpath \
       -ldflags="-s -w" \
       -o /app/server \
-      ./cmd/main.go
+      .
  
 
 # Stage 3: Runtime Reduction
