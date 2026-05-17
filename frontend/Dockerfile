@@ -18,8 +18,11 @@ FROM nginx:alpine
 
 # Remove default nginx config and default HTML
 RUN rm -rf /usr/share/nginx/html/* \
-    && rm /etc/nginx/conf.d/default.conf \
-    apk update && apk upgrade --no-cache && rm -rf /var/cache/apk/*
+    && rm /etc/nginx/conf.d/default.conf 
+
+# Upgrade all packages to get latest security patches
+# This ensures curl/libcurl are always at newest Alpine version
+RUN apk update && apk upgrade --no-cache && rm -rf /var/cache/apk/*
 
 # Copy built files from the builder stage
 
