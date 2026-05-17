@@ -19,7 +19,7 @@ jobs:
       - uses: docker/login-action@v4
         if: ${{ vars.DEPLOY_ENABLED == 'true' }}
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          username: ${{ vars.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build and push backend
@@ -28,8 +28,8 @@ jobs:
           context: ./backend
           push: ${{ vars.DEPLOY_ENABLED == 'true' }}
           tags: |
-            ${{ secrets.DOCKERHUB_USERNAME != '' && format('{0}/skillpulse-backend:latest', secrets.DOCKERHUB_USERNAME) || 'skillpulse-backend:latest' }}
-            ${{ secrets.DOCKERHUB_USERNAME != '' && format('{0}/skillpulse-backend:{1}', secrets.DOCKERHUB_USERNAME, github.sha) || format('skillpulse-backend:{0}', github.sha) }}
+            ${{ vars.DOCKERHUB_USERNAME != '' && format('{0}/skillpulse-backend:latest', vars.DOCKERHUB_USERNAME) || 'skillpulse-backend:latest' }}
+            ${{ vars.DOCKERHUB_USERNAME != '' && format('{0}/skillpulse-backend:{1}', vars.DOCKERHUB_USERNAME, github.sha) || format('skillpulse-backend:{0}', github.sha) }}
 
       - name: Build and push frontend
         uses: docker/build-push-action@v7
@@ -37,5 +37,5 @@ jobs:
           context: ./frontend
           push: ${{ vars.DEPLOY_ENABLED == 'true' }}
           tags: |
-            ${{ secrets.DOCKERHUB_USERNAME != '' && format('{0}/skillpulse-frontend:latest', secrets.DOCKERHUB_USERNAME) || 'skillpulse-frontend:latest' }}
-            ${{ secrets.DOCKERHUB_USERNAME != '' && format('{0}/skillpulse-frontend:{1}', secrets.DOCKERHUB_USERNAME, github.sha) || format('skillpulse-frontend:{0}', github.sha) }}
+            ${{ vars.DOCKERHUB_USERNAME != '' && format('{0}/skillpulse-frontend:latest', vars.DOCKERHUB_USERNAME) || 'skillpulse-frontend:latest' }}
+            ${{ vars.DOCKERHUB_USERNAME != '' && format('{0}/skillpulse-frontend:{1}', vars.DOCKERHUB_USERNAME, github.sha) || format('skillpulse-frontend:{0}', github.sha) }}
