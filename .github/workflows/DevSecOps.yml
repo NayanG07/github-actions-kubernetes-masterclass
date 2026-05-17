@@ -10,6 +10,10 @@ on:
         - '**/*.md'
   pull_request:
     branches: [main]
+    
+permissions:
+  contents: read
+  security-events: write
 
 jobs:
 
