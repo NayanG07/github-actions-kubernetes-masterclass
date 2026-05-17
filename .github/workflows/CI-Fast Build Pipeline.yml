@@ -199,7 +199,7 @@ jobs:
 
           if [[ \
             "${{ needs.test-backend.result }}" != "success" || \
-            "${{ needs.build.result }}"        != "success" || \
+            "${{ needs.build.result }}"        != "success" \
           ]]; then
             echo "❌ CI failed — images NOT promoted to CD."
             exit 1
