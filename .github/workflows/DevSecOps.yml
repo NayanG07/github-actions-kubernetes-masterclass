@@ -48,7 +48,7 @@ jobs:
         with:
           project: "skillpulse"
           path: "./backend"
-          format: "HTML,SARIF"
+          format: "ALL"
           out: "odc-reports"
           args: >
             --failOnCVSS 7
