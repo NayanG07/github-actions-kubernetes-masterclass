@@ -1,5 +1,5 @@
 # Stage 1 chche build
-FROM golang:1.26-alpine AS dep
+FROM golang:1.26-alpine AS deps
 
 # Set the working directory
 WORKDIR /app
@@ -9,10 +9,13 @@ COPY go.mod go.sum ./
 RUN go mod download && go mod verify
 
 # Stage 2: Build the application
-FROM dep AS builder
+FROM deps AS builder
 
 # Set the working directory
 WORKDIR /app
+
+ARG CACHE_BUST=1
+RUN echo "Cache bust: $CACHE_BUST"
 
 # Copy the entire application source code to the builder stage
 COPY . .

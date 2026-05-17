@@ -1,29 +1,33 @@
-name : DevSecOps Pipeline
+name: DevSecOps — Security Scanning
 
 on:
-  workflow_dispatch:
   push:
     branches: [main]
     paths-ignore:
-        - 'k8s/**'
-        - 'docs/**'
-        - '**/*.md'
+      - "**.md"
+      - "docs/**"
   pull_request:
     branches: [main]
-    
+
 permissions:
   contents: read
   security-events: write
 
-jobs:
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
 
+jobs:
+  # ──────────────────────────────────────────────────────────────────────────
+  # JOB 1 — Secret scanning
+  # ──────────────────────────────────────────────────────────────────────────
   secret-scan:
-    name: Secret Scan
+    name: Secret Scan (Gitleaks)
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkour Code
-        uses: actions/checkout@v6
+      - name: Checkout (full history)
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
@@ -31,10 +35,18 @@ jobs:
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    
-    
-# JOB 2 - OWASP Dependency Check
 
+      - name: Upload Gitleaks SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: results.sarif
+          category: gitleaks
+
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # JOB 2 — OWASP Dependency Check
+  # ──────────────────────────────────────────────────────────────────────────
   dependency-check:
     name: OWASP Dependency Check
     runs-on: ubuntu-latest
@@ -69,48 +81,50 @@ jobs:
           sarif_file: odc-reports/dependency-check-report.sarif
           category: owasp-dependency-check
 
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # JOB 3 — Trivy backend image scan
+  # ──────────────────────────────────────────────────────────────────────────
   trivy-backend:
     name: Trivy — backend image
     runs-on: ubuntu-latest
-    needs: secret-scan   # don't scan if secrets were found
+    needs: secret-scan
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # Build the image locally — we scan before pushing to Docker Hub.
-      # Tag with "scan" so it's clear this is the scan-only build.
       - name: Build backend image (local, no push)
         uses: docker/build-push-action@v6
         with:
-          context: ./backend
-          file:    ./backend/Dockerfile
-          push:    false
-          tags:    skillpulse-backend:scan
-          # Reuse GitHub Actions cache to speed up build
+          context:    ./backend
+          file:       ./backend/Dockerfile
+          push:       false
+          tags:       skillpulse-backend:scan
+          load:       true
+          # Pass git SHA as cache bust — every commit = fully fresh build
+          # This guarantees Trivy always scans the image built from the
+          # current commit's dependencies, never a stale cached image.
+          build-args: CACHE_BUST=${{ github.sha }}
           cache-from: type=gha,scope=backend
           cache-to:   type=gha,scope=backend,mode=max
-          load:    true   # load into local Docker daemon for trivy to scan
 
-      # Trivy scans the local image for:
-      #   - OS package CVEs (Alpine/distroless)
-      #   - Go library CVEs (from binary's embedded module info)
-      # CRITICAL severity: fail the build
-      # HIGH severity: show in report but don't fail (adjust as needed)
-      - name: Run Trivy on backend image
+      # SARIF scan — continue-on-error so the upload step always runs
+      # even if CVEs are found (exit-code 1 would otherwise skip it)
+      - name: Run Trivy on backend image (SARIF)
         uses: aquasecurity/trivy-action@master
         continue-on-error: true
         with:
-          image-ref:    "skillpulse-backend:scan"
-          format:       "sarif"
-          output:       "trivy-backend.sarif"
-          severity:     "CRITICAL,HIGH"
-          exit-code:    "1"          # fail the job on CRITICAL findings
-          ignore-unfixed: true       # skip CVEs with no fix available yet
-          trivyignores: ".trivyignore"
+          image-ref:      "skillpulse-backend:scan"
+          format:         "sarif"
+          output:         "trivy-backend.sarif"
+          severity:       "CRITICAL,HIGH"
+          exit-code:      "1"
+          ignore-unfixed: true
+          trivyignores:   ".trivyignore"
 
       - name: Upload Trivy backend SARIF
         uses: github/codeql-action/upload-sarif@v4
@@ -119,17 +133,22 @@ jobs:
           sarif_file: trivy-backend.sarif
           category:   trivy-backend
 
-      # Also produce a readable table report for the Actions log
-      - name: Trivy backend — table output
+      # Table scan — human-readable output in the Actions log
+      # exit-code 1 here is what actually fails the job if CVEs found
+      - name: Run Trivy on backend image (table)
         uses: aquasecurity/trivy-action@master
-        if: always()
         with:
-          image-ref:    "skillpulse-backend:scan"
-          format:       "table"
-          severity:     "CRITICAL,HIGH,MEDIUM"
+          image-ref:      "skillpulse-backend:scan"
+          format:         "table"
+          severity:       "CRITICAL,HIGH,MEDIUM"
+          exit-code:      "1"
           ignore-unfixed: true
+          trivyignores:   ".trivyignore"
 
 
+  # ──────────────────────────────────────────────────────────────────────────
+  # JOB 4 — Trivy frontend image scan
+  # ──────────────────────────────────────────────────────────────────────────
   trivy-frontend:
     name: Trivy — frontend image
     runs-on: ubuntu-latest
@@ -137,7 +156,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -145,47 +164,47 @@ jobs:
       - name: Build frontend image (local, no push)
         uses: docker/build-push-action@v6
         with:
-          context: ./frontend
-          file:    ./frontend/Dockerfile
-          push:    false
-          tags:    skillpulse-frontend:scan
+          context:    ./frontend
+          file:       ./frontend/Dockerfile
+          push:       false
+          tags:       skillpulse-frontend:scan
+          load:       true
+          build-args: CACHE_BUST=${{ github.sha }}
           cache-from: type=gha,scope=frontend
           cache-to:   type=gha,scope=frontend,mode=max
-          load:    true
 
-      - name: Run Trivy on frontend image
+      - name: Run Trivy on frontend image (SARIF)
         uses: aquasecurity/trivy-action@master
         continue-on-error: true
         with:
-          image-ref:    "skillpulse-frontend:scan"
-          format:       "sarif"
-          output:       "trivy-frontend.sarif"
-          severity:     "CRITICAL,HIGH"
-          exit-code:    "1"
+          image-ref:      "skillpulse-frontend:scan"
+          format:         "sarif"
+          output:         "trivy-frontend.sarif"
+          severity:       "CRITICAL,HIGH"
+          exit-code:      "1"
           ignore-unfixed: true
-          trivyignores: ".trivyignore"
+          trivyignores:   ".trivyignore"
 
       - name: Upload Trivy frontend SARIF
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
           sarif_file: trivy-frontend.sarif
           category:   trivy-frontend
 
-      - name: Trivy frontend — table output
+      - name: Run Trivy on frontend image (table)
         uses: aquasecurity/trivy-action@master
-        if: always()
         with:
-          image-ref:    "skillpulse-frontend:scan"
-          format:       "table"
-          severity:     "CRITICAL,HIGH,MEDIUM"
+          image-ref:      "skillpulse-frontend:scan"
+          format:         "table"
+          severity:       "CRITICAL,HIGH,MEDIUM"
+          exit-code:      "1"
           ignore-unfixed: true
+          trivyignores:   ".trivyignore"
 
 
   # ──────────────────────────────────────────────────────────────────────────
-  # JOB 4 — Trivy filesystem scan (IaC + config misconfigurations)
-  # Scans the repo itself — Dockerfiles, k8s manifests, terraform — for
-  # misconfigurations. Runs in parallel with image scans.
+  # JOB 5 — Trivy filesystem + IaC scan
   # ──────────────────────────────────────────────────────────────────────────
   trivy-fs:
     name: Trivy — filesystem + IaC
@@ -194,25 +213,22 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Trivy filesystem scan
         uses: aquasecurity/trivy-action@master
         with:
-          scan-type:   "fs"
-          scan-ref:    "."
-          format:      "sarif"
-          output:      "trivy-fs.sarif"
-          # misconfig catches: Dockerfile best-practice violations,
-          # k8s manifest issues (no resource limits, running as root, etc.),
-          # terraform security issues
-          scanners:    "misconfig,secret"
-          severity:    "CRITICAL,HIGH"
-          exit-code:   "0"   # warn only for IaC — don't fail on misconfig
+          scan-type:    "fs"
+          scan-ref:     "."
+          format:       "sarif"
+          output:       "trivy-fs.sarif"
+          scanners:     "misconfig,secret"
+          severity:     "CRITICAL,HIGH"
+          exit-code:    "0"
           trivyignores: ".trivyignore"
 
       - name: Upload Trivy FS SARIF
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
           sarif_file: trivy-fs.sarif
@@ -220,10 +236,8 @@ jobs:
 
 
   # ──────────────────────────────────────────────────────────────────────────
-  # JOB 5 — Security gate
-  # Final job that only passes if ALL security jobs passed.
-  # Your CI workflow should `needs: security-gate` before pushing images.
-  # This is the single checkpoint CD depends on.
+  # JOB 6 — Security gate
+  # Single checkpoint — CD depends on this passing
   # ──────────────────────────────────────────────────────────────────────────
   security-gate:
     name: Security Gate ✅
@@ -245,7 +259,6 @@ jobs:
           echo "trivy-frontend:    ${{ needs.trivy-frontend.result }}"
           echo "trivy-fs:          ${{ needs.trivy-fs.result }}"
 
-          # Fail if any required job did not succeed
           if [[ \
             "${{ needs.secret-scan.result }}"      != "success" || \
             "${{ needs.dependency-check.result }}" != "success" || \

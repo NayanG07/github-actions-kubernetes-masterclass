@@ -4,6 +4,9 @@ FROM nginx:alpine AS builder
 # Set the working directory
 WORKDIR /app
 
+ARG CACHE_BUST=1
+RUN echo "Cache bust: $CACHE_BUST"
+
 # Copy the application files to the builder stage
 COPY index.html .
 COPY css ./css
