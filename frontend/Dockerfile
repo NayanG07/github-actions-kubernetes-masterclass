@@ -18,7 +18,8 @@ FROM nginx:alpine
 
 # Remove default nginx config and default HTML
 RUN rm -rf /usr/share/nginx/html/* \
-    && rm /etc/nginx/conf.d/default.conf
+    && rm /etc/nginx/conf.d/default.conf \
+    apk update && apk upgrade --no-cache && rm -rf /var/cache/apk/*
 
 # Copy built files from the builder stage
 
