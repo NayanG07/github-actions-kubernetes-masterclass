@@ -2,7 +2,6 @@ name: CI — Fast Build Pipeline
 
 # ── Triggers ──────────────────────────────────────────────────────────────────
 on:
-  workflow_dispatch:  # manual trigger from GitHub UI
   push:
     branches: [main]
     paths-ignore:
@@ -209,61 +208,91 @@ jobs:
             expected: "200"
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
         with:
           username: ${{ vars.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Pull images
-        run: |
-          docker pull ${{ vars.DOCKERHUB_USERNAME }}/skillpulse-backend:${{ github.sha }}
-          docker pull ${{ vars.DOCKERHUB_USERNAME }}/skillpulse-frontend:${{ github.sha }}
+      - name: Pull image
+        run: docker pull ${{ matrix.image }}:${{ github.sha }}
 
-      - name: Start services with docker-compose
+      - name: Start container
         run: |
-          export DOCKERHUB_USERNAME=${{ vars.DOCKERHUB_USERNAME }}
-          export DOCKER_IMAGE_TAG=${{ github.sha }}
-          export DB_USER=skillpulse
-          export DB_PASSWORD=skillpulse123
-          export DB_NAME=skillpulse
-          export MYSQL_ROOT_PASSWORD=root
-          
-          docker-compose up -d
+          docker run -d \
+            --name ${{ matrix.service }}-smoke \
+            -p ${{ matrix.port }}:${{ matrix.port }} \
+            -e PORT=${{ matrix.port }} \
+            -e DB_HOST=localhost \
+            -e DB_PASSWORD=test \
+            ${{ matrix.image }}:${{ github.sha }}
 
-      - name: Wait for backend to be healthy
+          # Wait for container to be healthy
+          echo "Waiting for ${{ matrix.service }} to start..."
+          sleep 5
+
+          # Show logs if it crashed
+          docker logs ${{ matrix.service }}-smoke
+
+      - name: Smoke test HTTP endpoint
         run: |
-          echo "Waiting for backend to be ready..."
-          for attempt in {1..30}; do
-            if curl -s http://localhost:8080/health | grep -q "healthy"; then
-              echo "✅ Backend is healthy"
-              exit 0
-            fi
-            echo "Attempt $attempt: waiting..."
-            sleep 2
-          done
-          
-          echo "❌ Backend failed to become healthy"
-          docker-compose logs
-          exit 1
+          STATUS=$(curl -s -o /tmp/resp \
+            -w "%{http_code}" \
+            --retry 5 \
+            --retry-delay 2 \
+            --connect-timeout 5 \
+            http://localhost:${{ matrix.port }}${{ matrix.path }})
 
-      - name: Run smoke tests
-        run: |
-          echo "Testing backend health endpoint..."
-          curl -s http://localhost:8080/health | grep -q "healthy" || { echo "❌ Backend health check failed"; exit 1; }
-          echo "✅ Backend smoke test passed"
-          
-          echo "Testing frontend..."
-          curl -s http://localhost/ | grep -q "SkillPulse\|skillpulse" || { echo "⚠️  Frontend warning (might be expected)"; }
-          echo "✅ Frontend is responding"
+          echo "HTTP status: $STATUS"
+          echo "Response: $(cat /tmp/resp)"
 
-      - name: Show service logs on failure
-        if: failure()
-        run: docker-compose logsq
+          if [[ "${{ matrix.service }}" == "backend" ]]; then
+            # Backend: check status 200 AND body contains "healthy"
+            [[ "$STATUS" == "200" ]] || { echo "❌ Expected 200, got $STATUS"; exit 1; }
+            grep -q "${{ matrix.expected }}" /tmp/resp || { echo "❌ Body missing '${{ matrix.expected }}'"; exit 1; }
+          else
+            # Frontend: just check status 200
+            [[ "$STATUS" == "200" ]] || { echo "❌ Expected 200, got $STATUS"; exit 1; }
+          fi
+
+          echo "✅ Smoke test passed for ${{ matrix.service }}"
 
       - name: Cleanup
         if: always()
-        run: docker-compose down --volumes
+        run: docker rm -f ${{ matrix.service }}-smoke 2>/dev/null || true
+
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # JOB 4 — Build summary
+  # Single job that only passes if ALL jobs above passed.
+  # Your CD workflow should `needs: [build-summary]` instead of individual jobs.
+  # ──────────────────────────────────────────────────────────────────────────
+  build-summary:
+    name: Build Summary ✅
+    runs-on: ubuntu-latest
+    needs: [test-backend, build, smoke-test]
+    if: always()
+
+    steps:
+      - name: Check all jobs passed
+        run: |
+          echo "## CI Summary" >> $GITHUB_STEP_SUMMARY
+          echo "| Job | Result |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| test-backend | ${{ needs.test-backend.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| build        | ${{ needs.build.result }}        |" >> $GITHUB_STEP_SUMMARY
+          echo "| smoke-test   | ${{ needs.smoke-test.result }}   |" >> $GITHUB_STEP_SUMMARY
+          echo "| commit       | \`${{ github.sha }}\`            |" >> $GITHUB_STEP_SUMMARY
+
+          if [[ \
+            "${{ needs.test-backend.result }}" != "success" || \
+            "${{ needs.build.result }}"        != "success" || \
+            "${{ needs.smoke-test.result }}"   != "success" \
+          ]]; then
+            echo "❌ CI failed — images NOT promoted to CD."
+            exit 1
+          fi
+
+          echo "✅ All CI jobs passed. Images ready for CD."
+          echo "Backend:  ${{ env.BACKEND_IMAGE }}:${{ github.sha }}"
+          echo "Frontend: ${{ env.FRONTEND_IMAGE }}:${{ github.sha }}"
