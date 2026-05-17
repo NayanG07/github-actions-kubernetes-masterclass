@@ -1,0 +1,262 @@
+name: CI — Fast Build Pipeline
+
+# ── Triggers ──────────────────────────────────────────────────────────────────
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "k8s/**"
+      - "scripts/**"
+      - "terraform/**"
+      - "ansible/**"
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+
+# Cancel duplicate runs — if you push twice quickly, kill the first run
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY:       docker.io
+  BACKEND_IMAGE:  ${{ vars.DOCKERHUB_USERNAME }}/skillpulse-backend
+  FRONTEND_IMAGE: ${{ vars.DOCKERHUB_USERNAME }}/skillpulse-frontend
+
+jobs:
+  # ──────────────────────────────────────────────────────────────────────────
+  # JOB 1 — Go test + lint (runs in parallel with everything else)
+  # Catches code errors BEFORE spending time building Docker images.
+  # Uses Go module cache so `go mod download` is instant on repeat runs.
+  # ──────────────────────────────────────────────────────────────────────────
+  test-backend:
+    name: Test backend (Go)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          # Built-in Go module cache — caches ~/.cache/go/mod between runs.
+          # First run: downloads all modules (~30s).
+          # Subsequent runs: cache hit, skips download entirely (~2s).
+          cache: true
+          cache-dependency-path: backend/go.sum
+
+      - name: Download Go modules (cached)
+        working-directory: backend
+        run: go mod download
+
+      - name: Run Go tests
+        working-directory: backend
+        run: |
+          go test -v -race -coverprofile=coverage.out ./...
+          go tool cover -func=coverage.out
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: go-coverage-report
+          path: backend/coverage.out
+          retention-days: 7
+
+      - name: Vet (static analysis)
+        working-directory: backend
+        run: go vet ./...
+
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # JOB 2 — Matrix build: build BOTH images in parallel in one job definition
+  #
+  # Matrix strategy means GitHub spins up TWO runners simultaneously:
+  #   Runner A: builds skillpulse-backend
+  #   Runner B: builds skillpulse-frontend
+  #
+  # Without matrix: backend build finishes → then frontend starts = serial
+  # With matrix:    both build at the same time = ~50% faster total build time
+  #
+  # needs: [test-backend] — images only build if tests pass first
+  # ──────────────────────────────────────────────────────────────────────────
+  build:
+    name: Build ${{ matrix.service }} image
+    runs-on: ubuntu-latest
+    needs: [test-backend]
+    if: vars.DEPLOY_ENABLED == 'true'
+
+    # ── Matrix definition ──────────────────────────────────────────────────
+    # Each entry in `service` becomes a separate parallel runner.
+    # All matrix variables are available as ${{ matrix.* }} below.
+    strategy:
+      fail-fast: false     # if backend fails, still let frontend finish
+      matrix:
+        include:
+          - service:    backend
+            context:    ./backend
+            dockerfile: ./backend/Dockerfile
+            image:      ${{ vars.DOCKERHUB_USERNAME }}/skillpulse-backend
+            cache_scope: backend
+
+          - service:    frontend
+            context:    ./frontend
+            dockerfile: ./frontend/Dockerfile
+            image:      ${{ vars.DOCKERHUB_USERNAME }}/skillpulse-frontend
+            cache_scope: frontend
+
+    # ── Outputs: share image digest with CD workflow ───────────────────────
+    outputs:
+      backend-digest:  ${{ steps.build.outputs.digest }}
+      frontend-digest: ${{ steps.build.outputs.digest }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          # Use docker-container driver — required for advanced caching
+          driver-opts: network=host
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # Docker layer cache explanation:
+      #   cache-from: type=gha  → reads cached layers from GitHub Actions cache
+      #   cache-to:   type=gha  → writes new layers back to cache after build
+      #   mode=max              → caches ALL layers (including intermediate stages)
+      #                          not just the final image
+      #
+      # Result: on the first push, all layers are built fresh and cached.
+      # On the next push where only a .go file changed:
+      #   - golang:alpine layer          → cache HIT (not re-downloaded)
+      #   - go mod download layer        → cache HIT (go.sum unchanged)
+      #   - COPY source + go build layer → cache MISS (source changed, rebuilds)
+      #   - distroless runtime layer     → cache HIT
+      # Total time saved: ~60-80% on typical pushes
+      - name: Build & push ${{ matrix.service }}
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context:    ${{ matrix.context }}
+          file:       ${{ matrix.dockerfile }}
+          push:       true
+          tags: |
+            ${{ matrix.image }}:latest
+            ${{ matrix.image }}:${{ github.sha }}
+          build-args: |
+            CACHE_BUST=${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.cache_scope }}
+          cache-to:   type=gha,scope=${{ matrix.cache_scope }},mode=max
+          # Provenance + SBOM: free security metadata, shows in Docker Hub
+          provenance: true
+          sbom:       true
+          # Labels: bake build metadata into the image
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.created=${{ github.event.head_commit.timestamp }}
+
+      - name: Report image size
+        run: |
+          docker pull ${{ matrix.image }}:${{ github.sha }} --quiet
+          SIZE=$(docker image inspect ${{ matrix.image }}:${{ github.sha }} \
+            --format='{{.Size}}' | awk '{printf "%.1f MB", $1/1024/1024}')
+          echo "## ${{ matrix.service }} image size: $SIZE" >> $GITHUB_STEP_SUMMARY
+          echo "Tag: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # JOB 3 — Matrix smoke test: test BOTH images in parallel after build
+  #
+  # Spins up each image in a container and hits its health endpoint.
+  # Catches runtime errors (missing env vars, wrong port, crash on start)
+  # before the image reaches any Kubernetes environment.
+  #
+  # Runs in parallel for backend + frontend simultaneously.
+  # ──────────────────────────────────────────────────────────────────────────
+  smoke-test:
+    name: Smoke test ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    needs: [build]
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: backend
+            image:   ${{ vars.DOCKERHUB_USERNAME }}/skillpulse-backend
+            port:    8080
+            path:    /health
+            expected: "healthy"
+
+          - service: frontend
+            image:   ${{ vars.DOCKERHUB_USERNAME }}/skillpulse-frontend
+            port:    8080
+            path:    /
+            expected: "200"
+
+    steps:
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Pull image
+        run: docker pull ${{ matrix.image }}:${{ github.sha }}
+
+      - name: Start container
+        run: |
+          docker run -d \
+            --name ${{ matrix.service }}-smoke \
+            -p ${{ matrix.port }}:${{ matrix.port }} \
+            -e PORT=${{ matrix.port }} \
+            -e DB_HOST=localhost \
+            -e DB_PASSWORD=test \
+            ${{ matrix.image }}:${{ github.sha }}
+
+          # Wait for container to be healthy
+          echo "Waiting for ${{ matrix.service }} to start..."
+          sleep 5
+
+          # Show logs if it crashed
+          docker logs ${{ matrix.service }}-smoke
+
+      - name: Smoke test HTTP endpoint
+        run: |
+          STATUS=$(curl -s -o /tmp/resp \
+            -w "%{http_code}" \
+            --retry 5 \
+            --retry-delay 2 \
+            --connect-timeout 5 \
+            http://localhost:${{ matrix.port }}${{ matrix.path }})
+
+          echo "HTTP status: $STATUS"
+          echo "Response: $(cat /tmp/resp)"
+
+          if [[ "${{ matrix.service }}" == "backend" ]]; then
+            # Backend: check status 200 AND body contains "healthy"
+            [[ "$STATUS" == "200" ]] || { echo "❌ Expected 200, got $STATUS"; exit 1; }
+            grep -q "${{ matrix.expected }}" /tmp/resp || { echo "❌ Body missing '${{ matrix.expected }}'"; exit 1; }
+          else
+            # Frontend: just check status 200
+            [[ "$STATUS" == "200" ]] || { echo "❌ Expected 200, got $STATUS"; exit 1; }
+          fi
+
+          echo "✅ Smoke test passed for ${{ matrix.service }}"
+
+      - name: Cleanup
+        if: always()
+        run: docker rm -f ${{ matrix.service }}-smoke 2>/dev/null || true
