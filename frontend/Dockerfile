@@ -11,7 +11,7 @@ COPY js ./js
 
 # -----   Stage 2: Serve the application with Nginx --------
 
-FROM nginx:1.27-alpine
+FROM nginx:alpine
 
 # Remove default nginx config and default HTML
 RUN rm -rf /usr/share/nginx/html/* \
