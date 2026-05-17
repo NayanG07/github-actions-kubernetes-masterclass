@@ -40,13 +40,20 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code   
+      - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache: true
+
+      - name: Generate go.list
+        run: cd backend && go list -json -deps ./... > ../go.list
 
       - name: Nancy
         uses: sonatype-nexus-community/nancy-github-action@main
-        with:
-          nancyVersion: "latest"
 
       - name: OWASP Dependency-Check
         uses: dependency-check/Dependency-Check_Action@main
