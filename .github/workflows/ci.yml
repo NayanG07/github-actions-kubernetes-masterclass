@@ -1,6 +1,7 @@
 name: CI
 
 on:
+  workflow_dispatch:   # manual trigger for testing
   push:
     branches: [main]
     paths-ignore:
