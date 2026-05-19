@@ -20,7 +20,7 @@ jobs:
       - name: Pin backend + frontend images to commit SHA
         env:
           SHA: ${{ github.event.workflow_run.head_sha }}
-          DOCKER_USER: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKER_USER: ${{ vars.DOCKERHUB_USERNAME }}
         run: |
           if [ -z "$DOCKER_USER" ]; then
             echo "ERROR: DOCKERHUB_USERNAME secret is not set."
