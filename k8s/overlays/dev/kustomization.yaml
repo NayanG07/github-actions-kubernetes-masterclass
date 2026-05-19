@@ -10,7 +10,7 @@ namespace: skillpulse-dev
 
 namePrefix: ""   # no prefix — namespace already isolates resources
 
-commonLabels:
+labels:
   environment: dev
 
 # ── Dev image tags  ───────────────────────────────────────────────────────────
