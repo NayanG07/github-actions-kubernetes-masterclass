@@ -1,0 +1,14 @@
+# Production-only resource — not in base, not in dev/stg overlays.
+# Ensures Kubernetes never terminates more than 1 backend pod at a time
+# during node drains, rolling updates, or cluster maintenance.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: backend-pdb
+  namespace: skillpulse-prd
+spec:
+  minAvailable: 2       # with 3 replicas, max 1 can be down at any time
+  selector:
+    matchLabels:
+      app: backend
+      environment: prd

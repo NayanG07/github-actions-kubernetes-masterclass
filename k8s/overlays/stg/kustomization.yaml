@@ -1,0 +1,55 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+bases:
+  - ../../base
+
+namespace: skillpulse-stg
+
+commonLabels:
+  environment: stg
+
+images:
+  - name: nayuu/skillpulse-backend
+    newTag: latest
+  - name: nayuu/skillpulse-frontend
+    newTag: latest
+
+patches:
+  # 2 replicas in stg — mirrors prd topology, catches scaling bugs early
+  - target:
+      kind: Deployment
+      name: backend
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 2
+
+  - target:
+      kind: Deployment
+      name: frontend
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 2
+
+  # Stg NodePort: 30082
+  - target:
+      kind: Service
+      name: frontend
+    patch: |-
+      - op: replace
+        path: /spec/ports/0/nodePort
+        value: 30082
+
+  # Stg gets same limits as prd — so resource failures surface before prd
+  - target:
+      kind: Deployment
+      name: backend
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/cpu
+        value: "250m"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: "128Mi"

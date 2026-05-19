@@ -1,0 +1,63 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# ── Pull in everything from base ──────────────────────────────────────────────
+bases:
+  - ../../base
+
+# ── Dev-specific identity ─────────────────────────────────────────────────────
+namespace: skillpulse-dev
+
+namePrefix: ""   # no prefix — namespace already isolates resources
+
+commonLabels:
+  environment: dev
+
+# ── Dev image tags  ───────────────────────────────────────────────────────────
+# CD workflow patches these lines to pin the exact SHA being deployed.
+# "latest" here is a safe fallback for manual apply during development.
+images:
+  - name: nayuu/skillpulse-backend
+    newTag: latest
+  - name: nayuu/skillpulse-frontend
+    newTag: latest
+
+# ── Dev-specific patches ──────────────────────────────────────────────────────
+patches:
+  # 1 replica in dev — save resources
+  - target:
+      kind: Deployment
+      name: backend
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1
+
+  - target:
+      kind: Deployment
+      name: frontend
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1
+
+  # Dev NodePort: 30081 (stg=30082, prd=30080)
+  - target:
+      kind: Service
+      name: frontend
+    patch: |-
+      - op: replace
+        path: /spec/ports/0/nodePort
+        value: 30081
+
+  # Dev gets relaxed resource limits to keep costs low
+  - target:
+      kind: Deployment
+      name: backend
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/cpu
+        value: "150m"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: "96Mi"
