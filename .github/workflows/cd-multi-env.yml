@@ -2,6 +2,10 @@ name: Local CD — multi-env deploy
 
 on:
   workflow_dispatch:
+  workflow_run: 
+    workflows: ["CI"] # triggers after CI builds + pushes images 
+    types: [completed] 
+    branches: [main]
 
 permissions:
   contents: write
