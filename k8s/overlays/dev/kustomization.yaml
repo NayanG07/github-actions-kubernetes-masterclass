@@ -9,9 +9,9 @@ bases:
 namespace: skillpulse-dev
 
 namePrefix: ""   # no prefix — namespace already isolates resources
-
 labels:
-  environment: dev
+  - pairs:
+      environment: dev
 
 # ── Dev image tags  ───────────────────────────────────────────────────────────
 # CD workflow patches these lines to pin the exact SHA being deployed.

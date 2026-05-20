@@ -6,8 +6,9 @@ bases:
 
 namespace: skillpulse-prd
 
-commonLabels:
-  environment: prd
+labels:
+  - pairs:
+      environment: prd
 
 images:
   - name: nayuu/skillpulse-backend
