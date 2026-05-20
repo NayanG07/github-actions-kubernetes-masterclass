@@ -2,10 +2,10 @@ name: CD — multi-env deploy
 
 on:
   workflow_dispatch:           # manual trigger from Actions UI (for hotfixes, etc.)
-  workflow_run:
-    workflows: ["CI"]          # triggers after CI builds + pushes images
-    types: [completed]
-    branches: [main]
+  # workflow_run:
+  #   workflows: ["CI"]          # triggers after CI builds + pushes images
+  #   types: [completed]
+  #   branches: [main]
 
 # Only one deploy per env can run at a time — prevents race conditions
 concurrency:
