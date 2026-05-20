@@ -46,8 +46,8 @@ jobs:
           # kustomize edit set image patches the newTag in-place
           cd k8s/overlays/dev
           kustomize edit set image \
-            trainwithshubham/skillpulse-backend=trainwithshubham/skillpulse-backend:${SHORT} \
-            trainwithshubham/skillpulse-frontend=trainwithshubham/skillpulse-frontend:${SHORT}
+            nayuu/skillpulse-backend=nayuu/skillpulse-backend:${SHORT} \
+            nayuu/skillpulse-frontend=nayuu/skillpulse-frontend:${SHORT}
 
       - name: Apply to dev namespace
         run: |
@@ -95,8 +95,8 @@ jobs:
           SHORT=${SHA::7}
           cd k8s/overlays/stg
           kustomize edit set image \
-            trainwithshubham/skillpulse-backend=trainwithshubham/skillpulse-backend:${SHORT} \
-            trainwithshubham/skillpulse-frontend=trainwithshubham/skillpulse-frontend:${SHORT}
+            nayuu/skillpulse-backend=nayuu/skillpulse-backend:${SHORT} \
+            nayuu/skillpulse-frontend=nayuu/skillpulse-frontend:${SHORT}
 
       - name: Apply to stg namespace
         run: |
@@ -145,8 +145,8 @@ jobs:
           SHORT=${SHA::7}
           cd k8s/overlays/prd
           kustomize edit set image \
-            trainwithshubham/skillpulse-backend=trainwithshubham/skillpulse-backend:${SHORT} \
-            trainwithshubham/skillpulse-frontend=trainwithshubham/skillpulse-frontend:${SHORT}
+            nayuu/skillpulse-backend=nayuu/skillpulse-backend:${SHORT} \
+            nayuu/skillpulse-frontend=nayuu/skillpulse-frontend:${SHORT}
 
       - name: Apply to prd namespace
         run: |
