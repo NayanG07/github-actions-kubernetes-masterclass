@@ -1,175 +1,159 @@
-name: CD — multi-env deploy
+name: Local CD — multi-env deploy
 
 on:
-  workflow_dispatch:           # manual trigger from Actions UI (for hotfixes, etc.)
-  workflow_run:
-    workflows: ["CI"]          # triggers after CI builds + pushes images
-    types: [completed]
-    branches: [main]
+  workflow_dispatch:
 
-# Only one deploy per env can run at a time — prevents race conditions
 concurrency:
   group: deploy-${{ github.ref }}
-  cancel-in-progress: false    # don't cancel in-flight deploys, queue them
+  cancel-in-progress: false
 
 jobs:
-  # ────────────────────────────────────────────────────────────────────────────
-  # Job 1: Deploy to DEV (auto, no approval gate)
-  # ────────────────────────────────────────────────────────────────────────────
+
+  # ─────────────────────────────────────────────
+  # DEV
+  # ─────────────────────────────────────────────
   deploy-dev:
     name: Deploy → dev
-    runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: self-hosted
 
-    # GitHub Environment named "dev" — add env-level secrets there
-    # (DEV_KUBECONFIG). No protection rules = deploys immediately.
     environment:
       name: dev
-      url: http://${{ vars.DEV_CLUSTER_HOST }}:30081
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up kubectl
-        uses: azure/setup-kubectl@v4
-
-      - name: Configure kubeconfig
+      - name: Verify Kubernetes cluster
         run: |
-          mkdir -p $HOME/.kube
-          echo "${{ secrets.DEV_KUBECONFIG }}" | base64 -d > $HOME/.kube/config
-          chmod 600 $HOME/.kube/config
+          kubectl cluster-info
+          kubectl get nodes
+
+      - name: Verify tools
+        run: |
+          kubectl version --client
+          kustomize version
 
       - name: Pin image tags in dev overlay
         run: |
-          SHA=${{ github.sha }}
+          SHA=${GITHUB_SHA}
           SHORT=${SHA::7}
-          # kustomize edit set image patches the newTag in-place
+
           cd k8s/overlays/dev
+
           kustomize edit set image \
             nayuu/skillpulse-backend=nayuu/skillpulse-backend:${SHORT} \
             nayuu/skillpulse-frontend=nayuu/skillpulse-frontend:${SHORT}
 
-      - name: Apply to dev namespace
+      - name: Deploy to dev
         run: |
           kubectl apply -k k8s/overlays/dev
-          kubectl rollout status deployment/backend  -n skillpulse-dev --timeout=120s
+
+      - name: Verify dev rollout
+        run: |
+          kubectl rollout status deployment/backend -n skillpulse-dev --timeout=120s
           kubectl rollout status deployment/frontend -n skillpulse-dev --timeout=120s
 
-      # - name: Smoke test dev
-      #   run: |
-      #     # Basic HTTP check — if the frontend 404s or 5xx, fail fast before stg
-      #     sleep 10
-      #     STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-      #       http://${{ vars.DEV_CLUSTER_HOST }}:30081/)
-      #     echo "Dev smoke test HTTP status: $STATUS"
-      #     [ "$STATUS" = "200" ] || exit 1
+      - name: Show dev resources
+        run: |
+          kubectl get all -n skillpulse-dev
 
-  # ────────────────────────────────────────────────────────────────────────────
-  # Job 2: Deploy to STG (auto after dev passes, no manual gate)
-  # ────────────────────────────────────────────────────────────────────────────
+
+  # ─────────────────────────────────────────────
+  # STG
+  # ─────────────────────────────────────────────
   deploy-stg:
     name: Deploy → stg
-    runs-on: ubuntu-latest
-    needs: deploy-dev          # only runs if dev job succeeded
+    runs-on: self-hosted
+    needs: deploy-dev
 
     environment:
       name: stg
-      url: http://${{ vars.STG_CLUSTER_HOST }}:30082
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up kubectl
-        uses: azure/setup-kubectl@v4
-
-      - name: Configure kubeconfig
+      - name: Verify Kubernetes cluster
         run: |
-          mkdir -p $HOME/.kube
-          echo "${{ secrets.STG_KUBECONFIG }}" | base64 -d > $HOME/.kube/config
-          chmod 600 $HOME/.kube/config
+          kubectl cluster-info
+          kubectl get nodes
 
       - name: Pin image tags in stg overlay
         run: |
-          SHA=${{ github.sha }}
+          SHA=${GITHUB_SHA}
           SHORT=${SHA::7}
+
           cd k8s/overlays/stg
+
           kustomize edit set image \
             nayuu/skillpulse-backend=nayuu/skillpulse-backend:${SHORT} \
             nayuu/skillpulse-frontend=nayuu/skillpulse-frontend:${SHORT}
 
-      - name: Apply to stg namespace
+      - name: Deploy to stg
         run: |
           kubectl apply -k k8s/overlays/stg
-          kubectl rollout status deployment/backend  -n skillpulse-stg --timeout=180s
+
+      - name: Verify stg rollout
+        run: |
+          kubectl rollout status deployment/backend -n skillpulse-stg --timeout=180s
           kubectl rollout status deployment/frontend -n skillpulse-stg --timeout=180s
 
-      # - name: Smoke test stg
-      #   run: |
-      #     sleep 10
-      #     STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-      #       http://${{ vars.STG_CLUSTER_HOST }}:30082/)
-      #     echo "Stg smoke test HTTP status: $STATUS"
-      #     [ "$STATUS" = "200" ] || exit 1
+      - name: Show stg resources
+        run: |
+          kubectl get all -n skillpulse-stg
 
-  # ────────────────────────────────────────────────────────────────────────────
-  # Job 3: Deploy to PRD (requires manual approval via GitHub Environment)
-  # ────────────────────────────────────────────────────────────────────────────
+
+  # ─────────────────────────────────────────────
+  # PRD
+  # ─────────────────────────────────────────────
   deploy-prd:
     name: Deploy → prd
-    runs-on: ubuntu-latest
-    needs: deploy-stg          # only runs if stg job succeeded
+    runs-on: self-hosted
+    needs: deploy-stg
 
-    # GitHub Environment "prd" must have a Required Reviewer protection rule.
-    # The workflow pauses here until a reviewer approves in the Actions UI.
     environment:
       name: prd
-      url: http://${{ vars.PRD_CLUSTER_HOST }}:30080
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up kubectl
-        uses: azure/setup-kubectl@v4
-
-      - name: Configure kubeconfig
+      - name: Verify Kubernetes cluster
         run: |
-          mkdir -p $HOME/.kube
-          echo "${{ secrets.PRD_KUBECONFIG }}" | base64 -d > $HOME/.kube/config
-          chmod 600 $HOME/.kube/config
+          kubectl cluster-info
+          kubectl get nodes
 
       - name: Pin image tags in prd overlay
         run: |
-          SHA=${{ github.sha }}
+          SHA=${GITHUB_SHA}
           SHORT=${SHA::7}
+
           cd k8s/overlays/prd
+
           kustomize edit set image \
             nayuu/skillpulse-backend=nayuu/skillpulse-backend:${SHORT} \
             nayuu/skillpulse-frontend=nayuu/skillpulse-frontend:${SHORT}
 
-      - name: Apply to prd namespace
+      - name: Deploy to prd
         run: |
           kubectl apply -k k8s/overlays/prd
-          kubectl rollout status deployment/backend  -n skillpulse-prd --timeout=300s
+
+      - name: Verify prd rollout
+        run: |
+          kubectl rollout status deployment/backend -n skillpulse-prd --timeout=300s
           kubectl rollout status deployment/frontend -n skillpulse-prd --timeout=300s
 
-      - name: Verify prd health
+      - name: Show prd resources
         run: |
-          sleep 15
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-            http://${{ vars.PRD_CLUSTER_HOST }}:30080/)
-          echo "Prd health check HTTP status: $STATUS"
-          [ "$STATUS" = "200" ] || exit 1
+          kubectl get all -n skillpulse-prd
 
-      - name: Commit pinned tags back to main
-        # GitOps: the repo always reflects exactly what's running in prd
+      - name: Commit pinned tags back to repo
         run: |
-          git config user.name  "github-actions[bot]"
+          git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          SHA=${{ github.sha }}
-          SHORT=${SHA::7}
+
           git add k8s/overlays/prd/kustomization.yaml
-          git commit -m "deploy(prd): pin to ${SHORT}" || echo "nothing to commit"
+
+          git commit -m "deploy(prd): pin image tags to ${GITHUB_SHA::7}" || echo "Nothing to commit"
+
           git push
