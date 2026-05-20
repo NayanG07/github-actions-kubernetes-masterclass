@@ -23,15 +23,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Verify Kubernetes cluster
-        run: |
-          kubectl cluster-info
-          kubectl get nodes
-
       - name: Verify tools
         run: |
           kubectl version --client
           kustomize version
+
+      - name: Verify Kubernetes cluster
+        run: |
+          kubectl cluster-info
+          kubectl get nodes
 
       - name: Pin image tags in dev overlay
         run: |
@@ -43,6 +43,15 @@ jobs:
           kustomize edit set image \
             nayuu/skillpulse-backend=nayuu/skillpulse-backend:${SHORT} \
             nayuu/skillpulse-frontend=nayuu/skillpulse-frontend:${SHORT}
+
+      - name: Debug Kubernetes
+        run: |
+          whoami
+          echo "HOME=$HOME"
+          echo "KUBECONFIG=$KUBECONFIG"
+
+          kubectl config current-context
+          kubectl get nodes
 
       - name: Deploy to dev
         run: |
@@ -89,6 +98,15 @@ jobs:
             nayuu/skillpulse-backend=nayuu/skillpulse-backend:${SHORT} \
             nayuu/skillpulse-frontend=nayuu/skillpulse-frontend:${SHORT}
 
+      - name: Debug Kubernetes
+        run: |
+          whoami
+          echo "HOME=$HOME"
+          echo "KUBECONFIG=$KUBECONFIG"
+
+          kubectl config current-context
+          kubectl get nodes
+
       - name: Deploy to stg
         run: |
           kubectl apply -k k8s/overlays/stg
@@ -133,6 +151,15 @@ jobs:
           kustomize edit set image \
             nayuu/skillpulse-backend=nayuu/skillpulse-backend:${SHORT} \
             nayuu/skillpulse-frontend=nayuu/skillpulse-frontend:${SHORT}
+
+      - name: Debug Kubernetes
+        run: |
+          whoami
+          echo "HOME=$HOME"
+          echo "KUBECONFIG=$KUBECONFIG"
+
+          kubectl config current-context
+          kubectl get nodes
 
       - name: Deploy to prd
         run: |
