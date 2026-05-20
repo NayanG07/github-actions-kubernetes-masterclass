@@ -3,6 +3,9 @@ name: Local CD — multi-env deploy
 on:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 concurrency:
   group: deploy-${{ github.ref }}
   cancel-in-progress: false
