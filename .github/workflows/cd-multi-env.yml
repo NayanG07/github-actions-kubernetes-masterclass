@@ -2,10 +2,10 @@ name: CD — multi-env deploy
 
 on:
   workflow_dispatch:           # manual trigger from Actions UI (for hotfixes, etc.)
-  # workflow_run:
-  #   workflows: ["CI"]          # triggers after CI builds + pushes images
-  #   types: [completed]
-  #   branches: [main]
+  workflow_run:
+    workflows: ["CI"]          # triggers after CI builds + pushes images
+    types: [completed]
+    branches: [main]
 
 # Only one deploy per env can run at a time — prevents race conditions
 concurrency:
@@ -19,7 +19,7 @@ jobs:
   deploy-dev:
     name: Deploy → dev
     runs-on: ubuntu-latest
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
 
     # GitHub Environment named "dev" — add env-level secrets there
     # (DEV_KUBECONFIG). No protection rules = deploys immediately.
@@ -42,7 +42,7 @@ jobs:
 
       - name: Pin image tags in dev overlay
         run: |
-          SHA=${{ github.event.workflow_run.head_sha }}
+          SHA=${{ github.sha }}
           SHORT=${SHA::7}
           # kustomize edit set image patches the newTag in-place
           cd k8s/overlays/dev
@@ -92,7 +92,7 @@ jobs:
 
       - name: Pin image tags in stg overlay
         run: |
-          SHA=${{ github.event.workflow_run.head_sha }}
+          SHA=${{ github.sha }}
           SHORT=${SHA::7}
           cd k8s/overlays/stg
           kustomize edit set image \
@@ -142,7 +142,7 @@ jobs:
 
       - name: Pin image tags in prd overlay
         run: |
-          SHA=${{ github.event.workflow_run.head_sha }}
+          SHA=${{ github.sha }}
           SHORT=${SHA::7}
           cd k8s/overlays/prd
           kustomize edit set image \
@@ -168,7 +168,7 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          SHA=${{ github.event.workflow_run.head_sha }}
+          SHA=${{ github.sha }}
           SHORT=${SHA::7}
           git add k8s/overlays/prd/kustomization.yaml
           git commit -m "deploy(prd): pin to ${SHORT}" || echo "nothing to commit"
