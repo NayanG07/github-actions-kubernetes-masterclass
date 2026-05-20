@@ -41,7 +41,7 @@ patches:
     patch: |-
       - op: replace
         path: /spec/ports/0/nodePort
-        value: 30080
+        value: 30083
 
   # Prd gets full resource limits
   - target:
