@@ -11,10 +11,10 @@ labels:
 images:
 - name: nayuu/skillpulse-backend
   newName: nayuu/skillpulse-backend
-  newTag: 3f5f7c6
+  newTag: 82cc808
 - name: nayuu/skillpulse-frontend
   newName: nayuu/skillpulse-frontend
-  newTag: 3f5f7c6
+  newTag: 82cc808
 
   # 3 replicas in prd — HA, survives one node going down
 
