@@ -1,65 +1,67 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
-bases:
-  - ../../base
 
 namespace: skillpulse-prd
 
 labels:
-  - pairs:
-      environment: prd
+- pairs:
+    environment: prd
 
 images:
-  - name: nayuu/skillpulse-backend
-    newTag: latest
-  - name: nayuu/skillpulse-frontend
-    newTag: latest
+- name: nayuu/skillpulse-backend
+  newName: nayuu/skillpulse-backend
+  newTag: 3f5f7c6
+- name: nayuu/skillpulse-frontend
+  newName: nayuu/skillpulse-frontend
+  newTag: 3f5f7c6
 
-patches:
   # 3 replicas in prd — HA, survives one node going down
-  - target:
-      kind: Deployment
-      name: backend
-    patch: |-
-      - op: replace
-        path: /spec/replicas
-        value: 3
 
-  - target:
-      kind: Deployment
-      name: frontend
-    patch: |-
-      - op: replace
-        path: /spec/replicas
-        value: 3
 
   # Prd NodePort: 30080 (the "default" from base)
-  - target:
-      kind: Service
-      name: frontend
-    patch: |-
-      - op: replace
-        path: /spec/ports/0/nodePort
-        value: 30083
 
   # Prd gets full resource limits
-  - target:
-      kind: Deployment
-      name: backend
-    patch: |-
-      - op: replace
-        path: /spec/template/spec/containers/0/resources/limits/cpu
-        value: "500m"
-      - op: replace
-        path: /spec/template/spec/containers/0/resources/limits/memory
-        value: "256Mi"
 
   # Prd-only: pod disruption budget — never take all replicas down at once
-  - target:
-      kind: PodDisruptionBudget
-      name: backend-pdb
-    patch: |-
-      - op: replace
-        path: /spec/minAvailable
-        value: 2
+patches:
+- patch: |-
+    - op: replace
+      path: /spec/replicas
+      value: 3
+  target:
+    kind: Deployment
+    name: backend
+- patch: |-
+    - op: replace
+      path: /spec/replicas
+      value: 3
+  target:
+    kind: Deployment
+    name: frontend
+- patch: |-
+    - op: replace
+      path: /spec/ports/0/nodePort
+      value: 30083
+  target:
+    kind: Service
+    name: frontend
+- patch: |-
+    - op: replace
+      path: /spec/template/spec/containers/0/resources/limits/cpu
+      value: "500m"
+    - op: replace
+      path: /spec/template/spec/containers/0/resources/limits/memory
+      value: "256Mi"
+  target:
+    kind: Deployment
+    name: backend
+- patch: |-
+    - op: replace
+      path: /spec/minAvailable
+      value: 2
+  target:
+    kind: PodDisruptionBudget
+    name: backend-pdb
+resources:
+- ../../base
