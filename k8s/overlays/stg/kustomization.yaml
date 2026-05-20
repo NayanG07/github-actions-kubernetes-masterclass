@@ -7,7 +7,8 @@ bases:
 namespace: skillpulse-stg
 
 labels:
-  environment: stg
+  - pairs:
+      environment: stg
 
 images:
   - name: nayuu/skillpulse-backend
